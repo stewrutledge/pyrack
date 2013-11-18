@@ -21,20 +21,6 @@ class _RackAPI:
                       )
         self._cur = conn.cursor()
 
-    def _is_dict(self, attr_name):
-        self._connect(self._conn)
-        try:
-            self._cur.execute("SELECT Type from Attribute where name = '%s'" % attr_name)
-            resp = self._cur.fetchall()
-            if resp[0][0] == 'dict':
-                return True
-            if resp[0][0] != 'dict':
-                return False
-            self._cur.close()
-        except:
-            self._cur.close()
-            return False
-
     def _get_dict(self, dict_key):
         self._connect(self._conn)
         self._cur.execute("SELECT dict_value from Dictionary where dict_key = %s" % dict_key)
@@ -60,7 +46,11 @@ class _RackAPI:
         for attr in resp:
             attr_list[attr[0]] = attr[2]
         self._cur.close()
-        return attr_list
+        test_dict = {}
+        for attr in resp:
+            test_dict[attr[0]] = [attr[1], attr[2]]
+#        print test_dict
+        return test_dict
 
     def _ipv4(self, obj_id):
         self._connect(self._conn)
@@ -82,7 +72,7 @@ class _RackAPI:
         for router in routers:
             if ip_address(router[0]) in _network:
                 gateways.append(router[0])
-        payload.update({'gateways': gateways})
+        payload['gateways'] = gateways
         return payload 
 
     def _get_attributes(self, obj_id=None):
@@ -94,6 +84,8 @@ class _RackAPI:
             attr_map = self._gen_attr_map()
             network_info = self._ipv4(obj_id)
             for item in resp:
+                attr_name = attr_map[item[0]][1]
+                attr_type = attr_map[item[0]][0]
                 obj_mod = self._get_object(obj_id)
                 obj_attr['Asset no'] = obj_mod['asset']
                 obj_attr['Name'] = obj_mod['name']
@@ -103,20 +95,20 @@ class _RackAPI:
                 obj_attr['ipv4']['subnet'] = network_info['subnet']
                 obj_attr['ipv4']['network'] = network_info['network']
                 obj_attr['ipv4']['gateways'] = network_info['gateways']
-                if self._is_dict(attr_map[item[0]]):
+                if attr_type == 'dict':
                     try:
-                        obj_attr[attr_map[item[0]]] = self._get_dict(item[2])[0].split("%")[2]
+                        obj_attr[attr_name] = self._get_dict(item[2])[0].split("%")[2]
                     except:
-                        obj_attr[attr_map[item[0]]] = self._get_dict(item[2])[0]
+                        obj_attr[attr_name] = self._get_dict(item[2])[0]
                 else:
                     try:
                         attr_list = item[1].split(",")
                         if len(attr_list) > 1:
-                            obj_attr[attr_map[item[0]]] = attr_list
+                            obj_attr[attr_name] = attr_list
                         else:
-                            obj_attr[attr_map[item[0]]] = item[1]
+                            obj_attr[attr_name] = item[1]
                     except AttributeError:
-                        obj_attr[attr_map[item[0]]] = item[1]
+                        obj_attr[attr_name] = item[1]
         else:
             obj_attr = {'Name': None}
         self._cur.close()
