@@ -26,4 +26,8 @@ def by_fqdn(fqdn=None):
     return rackobjects.obj_attr(obj_id)
 #    except:
 #        return {'RackObj': 'could not find name!'}
+
+@route('/withrole/:env/:role_id')
+def with_role(role_id=None,env=None):
+    return rackobjects.with_role(role_id=role_id, environment=env)
 run(host='0.0.0.0', port=8080)

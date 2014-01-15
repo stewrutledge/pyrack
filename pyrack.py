@@ -42,15 +42,11 @@ class _RackAPI:
         self._connect(self._conn)
         self._cur.execute("SELECT * from Attribute")
         resp = self._cur.fetchall()
-        attr_list = {}
-        for attr in resp:
-            attr_list[attr[0]] = attr[2]
         self._cur.close()
-        test_dict = {}
+        attr_dict = {}
         for attr in resp:
-            test_dict[attr[0]] = [attr[1], attr[2]]
-#        print test_dict
-        return test_dict
+            attr_dict[attr[0]] = [attr[1], attr[2]]
+        return attr_dict
 
     def _ipv4(self, obj_id):
         self._connect(self._conn)
@@ -58,22 +54,62 @@ class _RackAPI:
         networks = self._cur.fetchall()
         networks = [(['%s/%s' % (net[0], net[1]), net[2]]) for net in networks] 
         self._cur.execute("SELECT INET_NTOA(ip) from IPv4Allocation where object_id = %s" % obj_id)
-        ipv4 = self._cur.fetchall()[0][0]
-        ipv4_obj = ip_address(unicode(ipv4))
-        self._cur.execute("SELECT INET_NTOA(ip) from IPv4Allocation where type = 'router'")
-        routers = self._cur.fetchall()
-        for network in networks:
-            if ipv4_obj in ip_network(network[0]):
-                payload = {'subnet': str(ip_network(network[0]).netmask), 'network': network[0], 'ipv4': ipv4}
-                net_id = network[1]
-                _network = ip_network(network[0])
-                break
-        gateways = []
-        for router in routers:
-            if ip_address(router[0]) in _network:
-                gateways.append(router[0])
-        payload['gateways'] = gateways
-        return payload 
+        try:
+            ipv4 = self._cur.fetchall()[0][0]
+            ipv4_obj = ip_address(unicode(ipv4))
+            router_sql = """SELECT
+                          INET_NTOA(ip)
+                          from IPv4Allocation
+                          where INET_NTOA(ip)
+                          like '%s.%s' AND type = 'shared'
+                          """% ((".").join(ipv4.split('.')[:+3]), '%')
+            self._cur.execute(router_sql)
+            routers = self._cur.fetchall()
+            if len(routers) == 0:
+                router_sql = """SELECT
+                              INET_NTOA(IP)
+                              from IPv4Allocation
+                              where INET_NTOA(ip)
+                              LIKE '%s.%s'
+                              """  % ((".").join(ipv4.split('.')[:+3]), '%')
+                self._cur.execute(router_sql)
+                routers = self._cur.fetchall()
+            for network in networks:
+                if ipv4_obj in ip_network(network[0]):
+                    payload = {'subnet': str(ip_network(network[0]).netmask), 'network': network[0], 'ipv4': ipv4}
+                    net_id = network[1]
+                    _network = ip_network(network[0])
+                    break
+            gateways = []
+            for router in routers:
+                if ip_address(router[0]) in _network:
+                    payload['gateway'] = router[0]
+                    break
+            return payload 
+        except:
+            return {'subnet': None, 'network': None, 'ipv4': None, 'gateway': None}
+
+    def _gen_role_dict(self):
+        self._connect(self._conn)
+        self._cur.execute("SELECT * from RolesMap")
+        resp = self._cur.fetchall()
+        role_dict = {}
+        for role in resp:
+            role_dict[role[0]] = role[1]
+        return role_dict
+
+    def _get_roles(self, obj_id=None):
+        role_dict = self._gen_role_dict()
+        self._connect(self._conn)
+        try:
+            self._cur.execute("SELECT role_id from Roles where obj_id = %s" % obj_id)
+            resp = self._cur.fetchall()
+        except:
+            resp = []
+        roles = []
+        for role in resp:
+            roles.append(role_dict[role[0]])
+        return roles
 
     def _get_attributes(self, obj_id=None):
         self._connect(self._conn)
@@ -89,12 +125,17 @@ class _RackAPI:
                 obj_mod = self._get_object(obj_id)
                 obj_attr['Asset no'] = obj_mod['asset']
                 obj_attr['Name'] = obj_mod['name']
-                obj_attr['DNS'] = self._get_dns(obj_id)
+                obj_attr['Roles2'] = self._get_roles(obj_id)
+                try:
+                    obj_attr['DNS'] = self._get_dns(obj_id)
+                except:
+                    obj_attr['DNS'] = None
                 obj_attr['ipv4'] = {}
                 obj_attr['ipv4']['ipaddress'] = network_info['ipv4']
                 obj_attr['ipv4']['subnet'] = network_info['subnet']
                 obj_attr['ipv4']['network'] = network_info['network']
-                obj_attr['ipv4']['gateways'] = network_info['gateways']
+                obj_attr['ipv4']['gateway'] = network_info['gateway']
+                obj_attr['obj_id'] = obj_id
                 if attr_type == 'dict':
                     try:
                         obj_attr[attr_name] = self._get_dict(item[2])[0].split("%")[2]
@@ -113,6 +154,44 @@ class _RackAPI:
             obj_attr = {'Name': None}
         self._cur.close()
         return obj_attr
+
+    def _with_role(self, role_id=None, environment=None):
+        role_dict = self._gen_role_dict()
+        self._connect(self._conn)
+        self._cur.execute("SELECT dict_key from Dictionary where dict_value = %s", environment)
+        env_resp = self._cur.fetchall()
+        env_id = env_resp[0]
+        self._connect(self._conn)
+        self._cur.execute(
+            "SELECT obj_id, role_id "
+            "FROM `rack_test`.`Roles` " 
+            "where obj_id = ANY ("
+                "SELECT obj_id from `rack_test`.`Roles` where role_id = %s"
+            ")" 
+            " AND obj_id = ANY (" 
+            "select object_id from AttributeValue where uint_value = %s)", (role_id, env_id) ) 
+#        self._cur.execute("SELECT obj_id, role_id from Roles where role_id = %s", role_id)
+        role_resp = self._cur.fetchall()
+        roles = {}
+        fqdns = {}
+        self._connect(self._conn)
+        self._cur.execute(
+            "SELECT string_value, object_id "
+            "FROM AttributeValue "
+            "WHERE attr_id = 3 "
+            "AND (object_id = %s)" 
+            % (" or object_id = ".join([str(obj_id[0]) for obj_id in role_resp]))
+        )
+        resp = self._cur.fetchall()
+        for fqdn in resp:
+            fqdns[fqdn[1]] = fqdn[0]
+        for role in role_resp:
+            try: 
+                roles[role_dict[role[1]]]
+            except KeyError:
+                roles[role_dict[role[1]]] = []
+            roles[role_dict[role[1]]].append(fqdns[role[0]])
+        return roles
 
     def _name_to_id(self, name=None):
         self._connect(self._conn)
@@ -167,3 +246,6 @@ class RackObjects(object):
         elif isinstance(obj_id, int):
             return self.rack._get_attributes(obj_id)
 
+
+    def with_role(self, role_id=None, environment=None):
+        return self.rack._with_role(role_id=role_id, environment=environment)
