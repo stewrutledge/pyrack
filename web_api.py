@@ -29,5 +29,8 @@ def by_fqdn(fqdn=None):
 
 @route('/withrole/:env/:role_id')
 def with_role(role_id=None,env=None):
-    return rackobjects.with_role(role_id=role_id, environment=env)
+    try:
+        return rackobjects.with_role(role_id=role_id, environment=env)
+    except:
+        return {}
 run(host='0.0.0.0', port=8080)
