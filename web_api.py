@@ -7,8 +7,16 @@ if __name__ != '__main__':
 
 from bottle import route, run, default_app, Bottle
 from pyrack import RackConnect, RackObjects
+from ConfigParser import ConfigParser
 
-rackdoc = RackConnect(mysql_host='localhost', user='rack', password='rack', database='rack_test')
+rackdb = ConfigParser()
+rackdb.readfp(open('rackdb.conf'))
+db_host = rackdb.get('mysql', 'hostname')
+db_user = rackdb.get('mysql', 'user')
+db_pass = rackdb.get('mysql', 'password')
+db_name = rackdb.get('mysql', 'dbname')
+
+rackdoc = RackConnect(mysql_host=db_host, user=db_user, password=db_pass, database=db_name)
 rackobjects = RackObjects(rackdoc)
 app = Bottle()
 

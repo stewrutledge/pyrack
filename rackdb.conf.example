@@ -1,0 +1,5 @@
+[mysql]
+user = MyUser
+password = SuperSecret
+hostname = localhost
+dbname = racktables
