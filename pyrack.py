@@ -91,7 +91,7 @@ class _RackAPI:
 
     def _gen_role_dict(self):
         self._connect(self._conn)
-        self._cur.execute("SELECT * from RolesMap")
+        self._cur.execute("SELECT id, tag from TagTree")
         resp = self._cur.fetchall()
         role_dict = {}
         for role in resp:
@@ -102,7 +102,7 @@ class _RackAPI:
         role_dict = self._gen_role_dict()
         self._connect(self._conn)
         try:
-            self._cur.execute("SELECT role_id from Roles where obj_id = %s" % obj_id)
+            self._cur.execute("SELECT tag_id from TagStorage where entity_id = %s" % obj_id)
             resp = self._cur.fetchall()
         except:
             resp = []
@@ -160,27 +160,31 @@ class _RackAPI:
         self._connect(self._conn)
         self._cur.execute("SELECT dict_key from Dictionary where dict_value = %s", environment)
         env_resp = self._cur.fetchall()
+        if len(env_resp) == 0:
+            raise KeyError("Could not get environment ID, does it exist?")
         env_id = env_resp[0]
         self._connect(self._conn)
         self._cur.execute(
-            "SELECT obj_id, role_id "
-            "FROM `rack_test`.`Roles` " 
-            "where obj_id = ANY ("
-                "SELECT obj_id from `rack_test`.`Roles` where role_id = %s"
-            ")" 
-            " AND obj_id = ANY (" 
-            "select object_id from AttributeValue where uint_value = %s)", (role_id, env_id) ) 
-#        self._cur.execute("SELECT obj_id, role_id from Roles where role_id = %s", role_id)
+            """SELECT entity_id, tag_id 
+            FROM `rack_test`.`TagStorage`  
+            where entity_id = ANY (
+                SELECT entity_id from `rack_test`.`TagStorage`) AND tag_id = ANY (
+                  SELECT id from `rack_test`.`TagTree` where parent_id = %s
+                )
+             AND entity_id = ANY ( 
+            select object_id from AttributeValue where uint_value = %s)""", (role_id, env_id)) 
         role_resp = self._cur.fetchall()
+        if len(role_resp) == 0:
+            raise KeyError("No hosts found")
         roles = {}
         fqdns = {}
         self._connect(self._conn)
-        self._cur.execute(
-            "SELECT string_value, object_id "
-            "FROM AttributeValue "
-            "WHERE attr_id = 3 "
-            "AND (object_id = %s)" 
-            % (" or object_id = ".join([str(obj_id[0]) for obj_id in role_resp]))
+        self._cur.execute("""
+            SELECT string_value, object_id
+            FROM AttributeValue
+            WHERE attr_id = 3
+            AND (object_id = %s)"""
+            , (" or object_id = ".join([str(obj_id[0]) for obj_id in role_resp]))
         )
         resp = self._cur.fetchall()
         for fqdn in resp:

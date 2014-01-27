@@ -37,8 +37,8 @@ def by_fqdn( fqdn=None):
 def with_role(role_id=None,env=None):
     try:
         return rackobjects.with_role(role_id=role_id, environment=env)
-    except:
-        return {}
+    except Exception as e:
+        return {"error": e.message}
 if __name__ == '__main__':
     run(host='0.0.0.0', port=8080)
 if __name__ != '__main__':
