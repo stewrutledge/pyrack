@@ -3,34 +3,46 @@ from ipaddress import ip_address, ip_network
 from pymysql import connect
 
 
+class RackError:
+    def __init__(self, value):
+        self.value = value
+
+    def __str__(self):
+        return repr(self.value)
+
+
 class _RackAPI:
     def __init__(self, mysql_host, user, password, database, charset='utf8'):
-        self._conn =   {'host': mysql_host,
-                       'user': user,
-                       'pass': password,
-                       'db': database,
-                       'charset': charset}
+        self._conn = {'host': mysql_host,
+                      'user': user,
+                      'pass': password,
+                      'db': database,
+                      'charset': charset}
 
     def _connect(self, connection):
         conn = connect(
-                        host=self._conn['host'],
-                        user=self._conn['user'],
-                        passwd=self._conn['pass'],
-                        db=self._conn['db'],
-                        charset=self._conn['charset']
-                      )
+            host=self._conn['host'],
+            user=self._conn['user'],
+            passwd=self._conn['pass'],
+            db=self._conn['db'],
+            charset=self._conn['charset']
+        )
         self._cur = conn.cursor()
 
     def _get_dict(self, dict_key):
         self._connect(self._conn)
-        self._cur.execute("SELECT dict_value from Dictionary where dict_key = %s" % dict_key)
+        self._cur.execute(
+            "SELECT dict_value from Dictionary where dict_key = %s" % dict_key
+        )
         resp = self._cur.fetchall()
         self._cur.close()
         return resp[0]
 
     def _get_object(self, obj_id):
         self._connect(self._conn)
-        self._cur.execute("SELECT name, asset_no FROM Object where id = %s" % obj_id)
+        self._cur.execute(
+            "SELECT name, asset_no FROM Object where id = %s" % obj_id
+        )
         resp = self._cur.fetchall()
         data = {}
         data['asset'] = resp[0][1]
@@ -52,8 +64,10 @@ class _RackAPI:
         self._connect(self._conn)
         self._cur.execute("SELECT INET_NTOA(ip), mask, id from IPv4Network")
         networks = self._cur.fetchall()
-        networks = [(['%s/%s' % (net[0], net[1]), net[2]]) for net in networks] 
-        self._cur.execute("SELECT INET_NTOA(ip) from IPv4Allocation where object_id = %s" % obj_id)
+        networks = [(['%s/%s' % (net[0], net[1]), net[2]]) for net in networks]
+        self._cur.execute("""
+            SELECT INET_NTOA(ip) from
+            IPv4Allocation where object_id = %s""" % obj_id)
         try:
             ipv4 = self._cur.fetchall()[0][0]
             ipv4_obj = ip_address(unicode(ipv4))
@@ -62,7 +76,7 @@ class _RackAPI:
                           from IPv4Allocation
                           where INET_NTOA(ip)
                           like '%s.%s' AND type = 'shared'
-                          """% ((".").join(ipv4.split('.')[:+3]), '%')
+                          """ % ((".").join(ipv4.split('.')[:+3]), '%')
             self._cur.execute(router_sql)
             routers = self._cur.fetchall()
             if len(routers) == 0:
@@ -71,23 +85,31 @@ class _RackAPI:
                               from IPv4Allocation
                               where INET_NTOA(ip)
                               LIKE '%s.%s'
-                              """  % ((".").join(ipv4.split('.')[:+3]), '%')
+                              """ % ((".").join(ipv4.split('.')[:+3]), '%')
                 self._cur.execute(router_sql)
                 routers = self._cur.fetchall()
             for network in networks:
-                if ipv4_obj in ip_network(network[0]):
-                    payload = {'subnet': str(ip_network(network[0]).netmask), 'network': network[0], 'ipv4': ipv4}
-                    net_id = network[1]
-                    _network = ip_network(network[0])
+                if ipv4_obj in ip_network(unicode(network[0])):
+                    payload = {
+                        'subnet': str(ip_network(unicode(network[0])).netmask),
+                        'network': network[0],
+                        'ipv4': ipv4
+                    }
+#                    net_id = network[1]
+                    _network = ip_network(unicode(network[0]))
                     break
-            gateways = []
+#            gateways = []
             for router in routers:
-                if ip_address(router[0]) in _network:
+                if ip_address(unicode(router[0])) in _network:
                     payload['gateway'] = router[0]
                     break
-            return payload 
-        except:
-            return {'subnet': None, 'network': None, 'ipv4': None, 'gateway': None}
+            return payload
+        except Exception as e:
+            print e
+            return {
+                'subnet': None, 'network': None,
+                'ipv4': None, 'gateway': None
+            }
 
     def _gen_role_dict(self):
         self._connect(self._conn)
@@ -102,7 +124,9 @@ class _RackAPI:
         role_dict = self._gen_role_dict()
         self._connect(self._conn)
         try:
-            self._cur.execute("SELECT tag_id from TagStorage where entity_id = %s" % obj_id)
+            self._cur.execute(
+                "SELECT tag_id from TagStorage where entity_id = %s" % obj_id
+            )
             resp = self._cur.fetchall()
         except:
             resp = []
@@ -113,13 +137,16 @@ class _RackAPI:
 
     def _get_attributes(self, obj_id=None):
         self._connect(self._conn)
-        self._cur.execute("SELECT attr_id, string_value, uint_value from AttributeValue where object_id = %s" % obj_id)
+        self._cur.execute("""
+            SELECT attr_id, string_value, uint_value
+            from AttributeValue where object_id = %s""" % obj_id)
         resp = self._cur.fetchall()
         if len(resp) > 0:
             obj_attr = {}
             attr_map = self._gen_attr_map()
             network_info = self._ipv4(obj_id)
             for item in resp:
+                print item
                 attr_name = attr_map[item[0]][1]
                 attr_type = attr_map[item[0]][0]
                 obj_mod = self._get_object(obj_id)
@@ -147,9 +174,12 @@ class _RackAPI:
                         if len(attr_list) > 1:
                             obj_attr[attr_name] = attr_list
                         else:
-                            obj_attr[attr_name] = item[1]
+                            if item[1] is None:
+                                obj_attr[attr_name] = item[2]
+                            else:
+                                obj_attr[attr_name] = item[1]
                     except AttributeError:
-                        obj_attr[attr_name] = item[1]
+                        obj_attr[attr_name] = item[2]
         else:
             obj_attr = {'Name': None}
         self._cur.close()
@@ -158,20 +188,22 @@ class _RackAPI:
     def _with_role(self, role_id=None, environment=None):
         role_dict = self._gen_role_dict()
         self._connect(self._conn)
-        self._cur.execute("SELECT dict_key from Dictionary where dict_value = %s", environment)
+        self._cur.execute(
+            "SELECT dict_key from Dictionary where dict_value = %s", environment
+        )
         env_resp = self._cur.fetchall()
         if len(env_resp) == 0:
             raise KeyError("Could not get environment ID, does it exist?")
         env_id = env_resp[0]
         self._connect(self._conn)
         self._cur.execute(
-            """SELECT entity_id, tag_id 
-            FROM `rack_test`.`TagStorage`  
+            """SELECT entity_id, tag_id
+            FROM `rack_test`.`TagStorage`
             where entity_id = ANY (
                 SELECT entity_id from `rack_test`.`TagStorage`) AND tag_id = ANY (
                   SELECT id from `rack_test`.`TagTree` where parent_id = %s
                 )
-             AND entity_id = ANY ( 
+             AND entity_id = ANY (
             select object_id from AttributeValue where uint_value = %s)""", (role_id, env_id)) 
         role_resp = self._cur.fetchall()
         if len(role_resp) == 0:
@@ -200,16 +232,20 @@ class _RackAPI:
     def _name_to_id(self, name=None):
         self._connect(self._conn)
         self._cur.execute("SELECT id FROM Object WHERE name = '%s'" % name)
-        resp = self._cur.fetchall()
+        resp = self._cur.fetchone()
         self._cur.close()
-        return resp[0][0]
+        if len(resp) == 0:
+            raise RackError('Could not find %s' % name)
+        return resp[0]
 
     def _fqdn_to_id(self, fqdn=None):
         self._connect(self._conn)
         self._cur.execute("SELECT object_id FROM AttributeValue WHERE string_value = '%s' and attr_id = 3" % fqdn)
-        resp = self._cur.fetchall()
+        resp = self._cur.fetchone()
         self._cur.close()
-        return resp[0][0]
+        if len(resp) == 0:
+            raise RackError('Could not find %s' % fqdn)
+        return resp[0]
 
     def _get_dns(self, obj_id=None):
         self._connect(self._conn)
