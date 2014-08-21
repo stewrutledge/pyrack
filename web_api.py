@@ -50,7 +50,14 @@ def with_role(role_id=None, env=None):
         return rackobjects.with_role(role_id=role_id, environment=env)
 #    except Exception as e:
 #        return {"error": e.message}
-if __name__ == '__main__':
-    run(host='0.0.0.0', port=8282)
-if __name__ != '__main__':
-    application = default_app()
+#if __name__ == '__main__':
+@route('/withtag/:tagString')
+def with_tag(tagString):
+    print tagString
+    resp = rackobjects.with_tag(tagString)
+    print resp
+    return {'matches': resp}
+
+run(host='127.0.0.1', port=8282)
+#if __name__ != '__main__':
+#    application = default_app()
