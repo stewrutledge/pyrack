@@ -1,6 +1,8 @@
 #coding=utf-8
 from ipaddress import ip_address, ip_network
 from pymysql import connect
+import struct
+from socket import inet_aton
 
 
 class RackError:
@@ -90,10 +92,26 @@ class _RackAPI:
                 routers = self._cur.fetchall()
             for network in networks:
                 if ipv4_obj in ip_network(unicode(network[0])):
+                    ipv4net = ip_network(unicode(network[0]))
+                    aton = struct.unpack("!I", inet_aton(ipv4net.network_address.exploded))[0]
+                    self._cur.execute("""
+                        SELECT id FROM IPv4Network
+                        WHERE ip = %s
+                        """, (aton, ))
+                    ipq_res = self._cur.fetchone()
+                    self._cur.execute("""SELECT vlan_id FROM
+                             VLANIPv4 where ipv4net_id = %s
+                            """, (ipq_res[0], ))
+                    vlanq_res = self._cur.fetchone()
+                    self._cur.execute("""SELECT vlan_descr FROM 
+                                   VLANDescription WHERE
+                                   vlan_id = %s""", (vlanq_res,))
+                    vlannameq_res = self._cur.fetchone()
                     payload = {
-                        'subnet': str(ip_network(unicode(network[0])).netmask),
+                        'subnet': str(ipv4net.netmask),
                         'network': network[0],
-                        'ipv4': ipv4
+                        'ipv4': ipv4,
+                        'vlanName': vlannameq_res[0]
                     }
 #                    net_id = network[1]
                     _network = ip_network(unicode(network[0]))
@@ -103,6 +121,7 @@ class _RackAPI:
                 if ip_address(unicode(router[0])) in _network:
                     payload['gateway'] = router[0]
                     break
+            print payload
             return payload
         except Exception as e:
             print e
@@ -162,6 +181,7 @@ class _RackAPI:
                 obj_attr['ipv4']['subnet'] = network_info['subnet']
                 obj_attr['ipv4']['network'] = network_info['network']
                 obj_attr['ipv4']['gateway'] = network_info['gateway']
+                obj_attr['ipv4']['vlan'] = network_info['vlanName']
                 obj_attr['obj_id'] = obj_id
                 if attr_type == 'dict':
                     try:
@@ -185,6 +205,41 @@ class _RackAPI:
         self._cur.close()
         return obj_attr
 
+    def _get_tag_id(self, tagString):
+        self._connect(self._conn)
+        self._cur.execute('select id from TagTree where tag = %s', (tagString, ))
+        resp = self._cur.fetchone()
+        if resp:
+            return resp[0]
+        else:
+            return None
+    
+    def _with_tag(self, tagString):
+        tagID = self._get_tag_id(tagString)
+        tagList = []
+        if tagID is not None:
+            self._cur.execute('select entity_id from TagStorage where tag_id = %s', (tagID, ))
+            tresp = self._cur.fetchall()
+        else:
+            tresp = ''
+        if len(tresp) > 0:
+            searchIDs = [id[0] for id in tresp]
+            query = ("""
+                SELECT name
+                FROM Object
+                WHERE id in (%s)"""
+            )
+            inTransform = ', '.join(map(lambda x: '%s', searchIDs))
+            query = query % inTransform
+            self._cur.execute(query, searchIDs)
+            withTagResp = self._cur.fetchall()
+        else:
+            withTagResp = []
+        if len(withTagResp) > 0:
+            return([name[0] for name in withTagResp])
+        else:
+            return([])
+  
     def _with_role(self, role_id=None, environment=None):
         role_dict = self._gen_role_dict()
         self._connect(self._conn)
@@ -198,10 +253,10 @@ class _RackAPI:
         self._connect(self._conn)
         self._cur.execute(
             """SELECT entity_id, tag_id
-            FROM `rack_test`.`TagStorage`
+            FROM `TagStorage`
             where entity_id = ANY (
-                SELECT entity_id from `rack_test`.`TagStorage`) AND tag_id = ANY (
-                  SELECT id from `rack_test`.`TagTree` where parent_id = %s
+                SELECT entity_id from `TagStorage`) AND tag_id = ANY (
+                  SELECT id from `TagTree` where parent_id = %s
                 )
              AND entity_id = ANY (
             select object_id from AttributeValue where uint_value = %s)""", (role_id, env_id)) 
@@ -211,22 +266,48 @@ class _RackAPI:
         roles = {}
         fqdns = {}
         self._connect(self._conn)
-        self._cur.execute("""
-            SELECT string_value, object_id
-            FROM AttributeValue
-            WHERE attr_id = 3
-            AND (object_id = %s)"""
-            , (" or object_id = ".join([str(obj_id[0]) for obj_id in role_resp]))
+        searchIDs = [int(obj_id[0]) for obj_id in role_resp]
+        
+        #print searchIDs
+        query = ("""
+            SELECT name, id
+            FROM Object
+            WHERE id in (%s)"""
         )
+        inTransform = ', '.join(map(lambda x: '%s', searchIDs))
+        query = query % inTransform
+        self._cur.execute(query, searchIDs)
         resp = self._cur.fetchall()
+        #print self._cur._last_executed
+        #print resp
         for fqdn in resp:
             fqdns[fqdn[1]] = fqdn[0]
+        #print fqdns
         for role in role_resp:
+          #  print role
             try: 
                 roles[role_dict[role[1]]]
             except KeyError:
                 roles[role_dict[role[1]]] = []
             roles[role_dict[role[1]]].append(fqdns[role[0]])
+        roles['_meta'] = {}
+        roles['_meta']['hostvars'] = {}
+        hostVars = roles['_meta']['hostvars']
+        for obj_id in searchIDs:
+            network_info = self._ipv4(obj_id)
+            hostVars[fqdns[obj_id]] = {'ansible_ssh_host': network_info['ipv4']}
+        for obj_id in searchIDs:
+            self._cur.execute('select string_value from AttributeValue where object_id = %s and attr_id = 10003', (obj_id, ))
+            resp = self._cur.fetchone()
+            print self._cur._last_executed
+        
+            print resp
+            if resp:
+                extraVars = resp[0].split()
+                for var in extraVars:
+                    k,v = var.split('=')
+                    hostVars[fqdns[obj_id]][k] = v
+            
         return roles
 
     def _name_to_id(self, name=None):
@@ -285,6 +366,10 @@ class RackObjects(object):
             return("Object ID must be an integer")
         elif isinstance(obj_id, int):
             return self.rack._get_attributes(obj_id)
+
+
+    def with_tag(self, tagString):
+        return(self.rack._with_tag(tagString))
 
 
     def with_role(self, role_id=None, environment=None):
